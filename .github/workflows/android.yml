@@ -1,0 +1,89 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pleos-app/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "pleos-app/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pleos-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Test, lint, assemble (standard)
+        run: ./gradlew testStandardDebugUnitTest lintStandardDebug assembleStandardRelease --stacktrace
+
+      - name: Lint summary
+        if: always()
+        run: |
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import collections, os, xml.etree.ElementTree as ET
+          path = "app/build/reports/lint-results-standardDebug.xml"
+          if not os.path.exists(path):
+              print("lint 결과 XML 이 없습니다.")
+              raise SystemExit(0)
+          issues = ET.parse(path).getroot().findall("issue")
+          count = collections.Counter((i.get("severity"), i.get("id")) for i in issues)
+          print(f"### Lint (standardDebug): {len(issues)}건")
+          print()
+          print("| 심각도 | ID | 건수 |")
+          print("|---|---|---|")
+          for (sev, iid), n in sorted(count.items(), key=lambda kv: (-kv[1], kv[0])):
+              print(f"| {sev} | {iid} | {n} |")
+          print()
+          for i in issues:
+              loc = i.find("location")
+              where = f'{loc.get("file", "").split("/pleos-app/")[-1]}:{loc.get("line", "")}' if loc is not None else ""
+              print(f"- {i.get('severity')} {i.get('id')} {where} — {i.get('message')}")
+          PY
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunnelfree-standard-release-apk
+          path: pleos-app/app/build/outputs/apk/standard/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            pleos-app/app/build/reports/
+            pleos-app/app/build/test-results/
+          if-no-files-found: ignore

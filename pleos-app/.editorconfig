@@ -1,0 +1,26 @@
+# pleos-app 코드 스타일 (Android Studio·ktlint 가 읽는다).
+# 기존 코드 스타일에 맞췄다: 4칸 들여쓰기, 한 줄 길이는 강제하지 않음.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{kt,kts}]
+ktlint_code_style = intellij_idea
+max_line_length = off
+ij_kotlin_allow_trailing_comma = true
+ij_kotlin_allow_trailing_comma_on_call_site = true
+ij_kotlin_imports_layout = *, java.**, javax.**, kotlin.**, ^
+ij_kotlin_name_count_to_use_star_import = 999
+ij_kotlin_name_count_to_use_star_import_for_members = 999
+
+[*.{xml,yml,yaml}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>터널프리 데스크톱</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#14181c;--panel:#1d2329;--high:#2a323a;--fg:#eef2f5;--muted:#a7b3bd;--accent:#4ea8ff;--calm:#57c99a;--warn:#f0b44c;--danger:#ef6461;--bar:#1c2127}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+#app{height:100%;display:grid;grid-template-columns:72px minmax(0,1fr) minmax(360px,34vw);grid-template-rows:minmax(0,1fr) 64px}
+#strip{grid-row:1/3;background:var(--panel);display:flex;flex-direction:column;gap:8px;padding:10px 8px}
+#strip button{height:58px;font-size:12px;padding:0}
+#strip .gap{flex:1}
+#mapwrap{position:relative;min-width:0}
+#map{position:absolute;inset:0;background:#20262c}
+#tbt{position:absolute;left:12px;top:12px;z-index:500;background:rgba(10,12,14,.86);border-radius:10px;padding:10px 16px;display:none}
+#tbt b{display:block;font-size:24px}
+#hint{position:absolute;right:12px;bottom:24px;z-index:500;background:rgba(10,12,14,.72);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--muted)}
+#bar{background:var(--bar);display:flex;align-items:center;gap:14px;padding:0 12px;min-width:0}
+#bar button{height:48px;min-width:84px}
+#barText{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#panel{grid-column:3;grid-row:1/3;background:var(--panel);padding:14px;overflow:auto;display:flex;flex-direction:column;gap:10px;min-width:0}
+h2{font-size:20px;margin:0}
+button{background:var(--high);color:var(--fg);border:0;border-radius:8px;padding:8px 12px;font:inherit;cursor:pointer}
+button:hover{outline:1px solid var(--accent)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent)}
+button.primary{background:var(--accent);color:#06121e;font-weight:700}
+button.on{background:var(--accent);color:#06121e}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.tiles button{height:104px;font-size:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.item{display:flex;justify-content:space-between;gap:10px;padding:10px 8px;border-bottom:1px solid var(--high);cursor:pointer}
+.item:hover{background:var(--high)}
+.item small{display:block;color:var(--muted)}
+.tag{display:inline-block;border-radius:4px;padding:2px 8px;font-size:13px;font-weight:700;color:#10151a}
+.muted{color:var(--muted);font-size:13px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.card{background:var(--high);border:2px solid transparent;border-radius:8px;padding:10px;cursor:pointer}
+.card.sel{border-color:var(--accent)}
+.card b{display:block}
+input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--high);background:var(--bg);color:var(--fg);font:inherit}
+kbd{background:var(--high);border-radius:4px;padding:0 5px;font-size:12px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="strip">
+    <button id="bMenu" title="메뉴 (M)">메뉴</button>
+    <button id="bFit" title="경로 전체 (F)">전체</button>
+    <button id="bIn" title="확대 (+)">확대</button>
+    <button id="bOut" title="축소 (-)">축소</button>
+    <div class="gap"></div>
+    <button id="bOpt" title="경로 옵션 (O)">옵션</button>
+  </div>
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div id="tbt"></div>
+    <div id="hint">더블클릭 목적지 · <kbd>/</kbd> 검색 · <kbd>Enter</kbd> 안내 · <kbd>Space</kbd> 일시정지 · <kbd>Esc</kbd> 뒤로</div>
+  </div>
+  <div id="bar"><button id="bGo" class="primary">안내 시작</button><div id="barText">목적지를 찾으세요</div></div>
+  <div id="panel"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const START=[36.3061,127.3446];
+const map=L.map('map',{doubleClickZoom:false,zoomControl:false}).setView(START,13);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
+const layer=L.layerGroup().addTo(map), car=L.circleMarker(START,{radius:9,color:'#fff',fillColor:'#2979ff',fillOpacity:1}).addTo(map);
+const panel=document.getElementById('panel'), S={screen:'menu',dest:null,data:null,sel:null,level:'FULL',condition:'NORMAL',urgency:'NORMAL',night:false,passenger:false,drive:null,paused:false,parking:null};
+const LEVELS=[['FULL','모든 터널 회피'],['SHORT_OK','300 m 이하'],['MEDIUM_OK','1 km 이하'],['LONG_OK','3 km 이하'],['NONE','회피 안 함']];
+const COND=[['GOOD','좋음'],['NORMAL','보통'],['HARD','힘듦']], URG=[['NORMAL','여유 있음'],['TIME_LIMITED','시간 제한'],['MEDICAL','응급 이송']];
+const fmt=m=>m>=1000?(m/1000).toFixed(1)+' km':Math.round(m/10)*10+' m';
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const get=u=>fetch(u).then(r=>r.json());
+const route=()=>S.data&&S.data.routes.find(r=>r.id===S.sel);
+function list(items){return items.map((h,i)=>`<div class="item" data-i="${i}"><span>${esc(h.name)}<small>${esc(h.category)}</small></span><span class="muted">${h.distanceM?fmt(h.distanceM):''}</span></div>`).join('')||'<p class="muted">결과가 없습니다.</p>'}
+function bindList(items){panel.querySelectorAll('.item').forEach(e=>e.onclick=()=>choose(items[+e.dataset.i]))}
+function header(t){return `<div class="row" style="align-items:center"><button onclick="show('menu')">뒤로</button><h2>${esc(t)}</h2></div>`}
+async function choose(p){S.dest=p;S.screen='route';await calc()}
+async function calc(){
+  if(!S.dest)return render();
+  const pos=S.from||START;const q=new URLSearchParams({fromLat:pos[0],fromLng:pos[1],lat:S.dest.lat,lng:S.dest.lng,level:S.level,condition:S.condition,urgency:S.urgency,night:S.night,passenger:S.passenger});
+  S.data=await get('/api/route?'+q); S.sel=S.data.recommended; draw(); render(); fit();
+}
+function draw(){
+  layer.clearLayers();
+  if(!S.data)return;
+  for(const r of S.data.routes){
+    const on=r.id===S.sel;
+    L.polyline(r.points,{color:on?'#2979ff':'#f0a030',weight:on?7:4,opacity:on?.95:.75}).on('click',()=>{S.sel=r.id;draw();render()}).addTo(layer);
+    if(on)for(const t of r.tunnels)L.polyline(slice(r,t.startM,t.endM),{color:'#e53935',weight:9}).addTo(layer);
+  }
+  if(S.dest)L.marker([S.dest.lat,S.dest.lng]).addTo(layer);
+  if(S.parking)for(const p of S.parking.lots)L.circleMarker([p.lat,p.lng],{radius:7,color:p.enclosed?'#f0b44c':'#57c99a',fillOpacity:.8}).bindTooltip(esc(p.name)).addTo(layer);
+}
+function slice(r,a,b){const out=[];for(let i=0;i<r.points.length;i++)if(r.cum[i]>=a&&r.cum[i]<=b)out.push(r.points[i]);return out.length>1?out:[r.points[0],r.points[0]]}
+function fit(){const r=route();if(r)map.fitBounds(L.latLngBounds(r.points),{padding:[40,40]})}
+function at(r,d){let i=r.cum.findIndex(c=>c>=d);if(i<=0)return r.points[Math.max(i,0)];if(i<0)return r.points[r.points.length-1];const k=(d-r.cum[i-1])/Math.max(r.cum[i]-r.cum[i-1],.1);return[r.points[i-1][0]+(r.points[i][0]-r.points[i-1][0])*k,r.points[i-1][1]+(r.points[i][1]-r.points[i-1][1])*k]}
+function start(){
+  const r=route();if(!r||S.drive)return;
+  S.drive={d:0,r,asked:false};S.screen='drive';S.paused=false;map.setView(r.points[0],16);render();
+  S.timer=setInterval(()=>{
+    if(S.paused)return;
+    const D=S.drive;D.d+=28;const p=at(r,D.d);car.setLatLng(p);map.panTo(p,{animate:false});
+    const next=r.maneuvers.find(m=>m.atM>D.d);const tbt=document.getElementById('tbt');
+    tbt.style.display=next?'block':'none';if(next)tbt.innerHTML=`<b>${fmt(next.atM-D.d)}</b>${esc(next.label)} ${esc(next.road)}`;
+    const inside=r.tunnels.find(t=>D.d>=t.startM&&D.d<=t.endM);
+    document.getElementById('barText').textContent=(inside?'터널 통과 중 · ':'')+'남은 거리 '+fmt(r.lengthM-D.d)+' · '+S.dest.name;
+    if(!D.asked&&r.lengthM-D.d<=1000){D.asked=true;parking()}
+    if(D.d>=r.lengthM)finish();
+  },250);
+}
+function finish(){clearInterval(S.timer);const r=S.drive.r;S.drive=null;document.getElementById('tbt').style.display='none';S.screen='arrived';S.arrivedRoute=r;render()}
+async function parking(){const t=S.dest||{lat:START[0],lng:START[1]};S.parking=await get(`/api/parking?lat=${t.lat}&lng=${t.lng}&avoid=${S.level!=='NONE'}`);S.screen='parking';draw();render()}
+function cancel(){if(S.timer)clearInterval(S.timer);Object.assign(S,{from:null,drive:null,dest:null,data:null,sel:null,parking:null,screen:'menu'});car.setLatLng(START);document.getElementById('tbt').style.display='none';layer.clearLayers();map.setView(START,13);render()}
+function show(s){S.screen=s;render()}
+function chips(items,cur,key){return `<div class="row">${items.map(([v,l])=>`<button class="${cur===v?'on':''}" data-k="${key}" data-v="${v}">${l}</button>`).join('')}</div>`}
+function render(){
+  const go=document.getElementById('bGo'),text=document.getElementById('barText');
+  go.textContent=S.drive?'경로 취소':S.screen==='arrived'?'새 목적지':'안내 시작';
+  if(!S.drive)text.textContent=S.dest?S.dest.name:'목적지를 찾으세요';
+  const v=S.screen;
+  if(v==='menu'&&S.dest&&!S.drive)return renderRoute();
+  if(v==='menu'){panel.innerHTML=peopleHtml()+`<h2>내비게이션 메뉴</h2><div class="tiles"><button onclick="show('search')">검색</button><button onclick="nearby('REST_AREA')">주변 시설</button><button onclick="show('places')">시연 목적지</button><button onclick="parking()">주차장</button><button onclick="nearby('')">응급 시설</button><button onclick="show('options')">경로 옵션</button></div><p class="muted">지도를 더블클릭하면 그 지점을 목적지로 정합니다.</p>`;return}
+  if(v==='situation')return renderSituation();
+  if(v==='route')return renderRoute();
+  if(v==='options'){panel.innerHTML=header('경로 옵션')+`<b>터널 회피</b>${chips(LEVELS,S.level,'level')}<b>오늘 상태</b>${chips(COND,S.condition,'condition')}<b>시간 조건</b>${chips(URG,S.urgency,'urgency')}<div class="row"><button class="${S.night?'on':''}" data-k="night">야간</button><button class="${S.passenger?'on':''}" data-k="passenger">동승자 있음</button></div><p class="muted">한도는 임상 기준이 아니라 개인 설정값입니다.</p>`;
+    panel.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{const k=b.dataset.k;if(b.dataset.v)S[k]=b.dataset.v;else S[k]=!S[k];calc()});return}
+  if(v==='search'){panel.innerHTML=header('검색')+`<input id="q" placeholder="장소 이름"><div id="res"></div>`;const q=document.getElementById('q');q.focus();q.oninput=async()=>{const r=await get('/api/search?q='+encodeURIComponent(q.value));document.getElementById('res').innerHTML=list(r);bindList(r)};return}
+  if(v==='places'){get('/api/places').then(r=>{panel.innerHTML=header('시연 목적지')+list(r);bindList(r)});return}
+  if(v==='parking'){const p=S.parking;const b=p.lots.find(l=>l.id===p.bestId);panel.innerHTML=header('주변 주차장')+(b?`<div class="card sel"><b>${esc(b.name)}</b>${esc(p.reason)}<div class="row" style="margin-top:8px"><button class="primary" id="pGo">안내</button></div></div>`:'<p class="muted">반경 800 m 안에서 찾은 주차장이 없습니다.</p>')+p.lots.filter(l=>l!==b).map((l,i)=>`<div class="item" data-id="${esc(l.id)}"><span>${esc(l.name)}<small style="color:${l.enclosed?'var(--warn)':''}">${esc(l.kind)}</small></span><span class="muted">${fmt(l.distanceM)}</span></div>`).join('')+'<p class="muted">빈자리는 현장에서 확인하세요. 공모전 SDK 에 실시간 주차 정보가 없습니다.</p>';
+    const pick=l=>{if(S.timer)clearInterval(S.timer);S.drive=null;S.parking=null;choose({name:l.name,lat:l.lat,lng:l.lng})};
+    if(b)document.getElementById('pGo').onclick=()=>pick(b);panel.querySelectorAll('.item').forEach(e=>e.onclick=()=>pick(p.lots.find(l=>l.id===e.dataset.id)));return}
+  if(v==='drive'){panel.innerHTML=`<h2>주행 중</h2><p>${esc(S.dest.name)}</p>`+peopleHtml()+`<div class="row"><button onclick="S.paused=!S.paused">일시정지</button><button onclick="parking()">목적지 주변 주차장</button></div><p class="muted">모의 주행입니다.</p>`;return}
+  if(v==='arrived'){const r=S.arrivedRoute;panel.innerHTML=`<h2>목적지 도착</h2><p>${fmt(r.lengthM)} 주행 · 터널 ${r.tunnelCount}개 통과</p><div class="row"><button onclick="parking()">주변 주차장</button><button class="primary" onclick="cancel()">새 목적지</button></div>`}
+}
+let PEOPLE=[];get('/api/people').then(r=>{PEOPLE=r;render()});
+function peopleHtml(){return `<b>지금 도움이 필요한가요?</b><div class="cards" style="grid-template-columns:1fr 1fr">${PEOPLE.map(p=>`<div class="card" onclick="situation('${p.id}')"><b>${esc(p.label)}</b><span class="muted">${esc(p.hint)}</span></div>`).join('')}</div>`}
+async function situation(person){
+  const D=S.drive,r=D&&D.r,inside=r&&r.tunnels.find(t=>D.d>=t.startM&&D.d<=t.endM),seg=r&&r.segments.find(s=>D.d>=s.startM&&D.d<=s.endM);
+  const road=inside?'TUNNEL':seg?seg.road:'UNKNOWN';
+  const q=new URLSearchParams({person,road,ahead:!!(r&&r.tunnels.some(t=>t.endM>D.d))});if(inside)q.set('exitM',inside.endM-D.d);
+  const p=await get('/api/situation?'+q);S.backTo=S.screen;S.paused=!!D;S.screen='situation';S.plan=p;render();
+}
+function renderSituation(){const p=S.plan;panel.innerHTML=`<h2>${esc(p.title)}</h2><ul>${p.steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ul><div class="row" style="flex-direction:column">${p.actions.map((a,i)=>`<button class="${i?'':'primary'}" style="${a.id==='CALL_119'?'background:var(--danger);color:#fff':''}" onclick="helpAction('${a.id}')">${esc(a.label)}</button>`).join('')}<button onclick="closeSituation()">닫기</button></div><p class="muted">음성 안내: ${esc(p.spoken)}</p><p id="sitNote" class="muted"></p>`}
+function closeSituation(){S.paused=false;S.screen=S.backTo||'menu';render()}
+async function helpAction(id){
+  const note=document.getElementById('sitNote'),phone={CALL_119:'119',CALL_ROADSIDE:'1588-2504',CALL_GUARDIAN:'보호자'}[id];
+  if(phone){note.textContent=phone+' 전화 연결은 차량 앱에서 동작합니다.';return}
+  if(id==='BREATHING'){note.textContent='호흡 안내는 차량 앱에서 음성으로 진행합니다.';return}
+  if(id==='AVOID_TUNNELS'){S.level='FULL'}
+  const pos=S.drive?at(S.drive.r,S.drive.d):START;
+  if(id==='AVOID_TUNNELS'){if(S.timer)clearInterval(S.timer);S.drive=null;S.from=pos;S.screen='route';return calc()}
+  const cat=id==='NEAREST_HOSPITAL'?'HOSPITAL':'REST_AREA',hits=await get(`/api/nearby?category=${cat}&lat=${pos[0]}&lng=${pos[1]}`);
+  if(!hits.length){note.textContent='가까운 시설을 찾지 못했습니다.';return}
+  if(S.timer)clearInterval(S.timer);S.drive=null;S.from=pos;choose(hits[0]);
+}
+function renderRoute(){
+  const d=S.data;if(!d)return;
+  if(d.error){panel.innerHTML=header('경로')+`<p>${esc(d.error)}</p>`;return}
+  const tone={MUST_AVOID:'var(--danger)',MUST_PASS:'var(--warn)'}[d.code]||'var(--calm)';
+  panel.innerHTML=`<div class="row" style="align-items:center"><span class="tag" style="background:${tone}">${esc(d.verdict)}</span><b>${esc(d.headline)}</b></div><p class="muted">${d.reasons.map(esc).join(' ')}</p><div class="cards">${d.routes.map(r=>`<div class="card ${r.id===S.sel?'sel':''}" data-id="${r.id}"><b style="color:${r.tunnelCount?'var(--warn)':'var(--calm)'}">${r.tunnelCount?'터널 '+r.tunnelCount+'개':'터널 없음'}</b>약 ${r.minutes}분 · ${fmt(r.lengthM)}<div class="muted">${r.tunnelCount?'최장 '+fmt(r.longestM)+' · 약 '+r.longestSec+'초':'터널 구간 없음'}</div></div>`).join('')}</div><div class="row"><button class="primary" onclick="start()">안내 시작</button><button onclick="parking()">주차장</button><button onclick="show('options')">경로 옵션</button><button onclick="cancel()">취소</button></div>`;
+  panel.querySelectorAll('.card').forEach(c=>c.onclick=()=>{S.sel=c.dataset.id;draw();renderRoute()});
+}
+async function nearby(cat){const r=await get('/api/nearby?category='+cat);panel.innerHTML=header(cat?'주변 시설':'응급 시설')+(cat?`<div class="row">${[['REST_AREA','휴게소'],['FUEL','주유소'],['RESTAURANT','음식점'],['HOSPITAL','병원']].map(([v,l])=>`<button class="${cat===v?'on':''}" onclick="nearby('${v}')">${l}</button>`).join('')}</div>`:'<p style="color:var(--danger)">위급하면 직접 운전하지 말고 119에 연락하세요.</p>')+list(r);bindList(r)}
+map.on('dblclick',e=>choose({name:'지도에서 고른 지점',lat:e.latlng.lat,lng:e.latlng.lng}));
+document.getElementById('bGo').onclick=()=>{if(S.drive||S.screen==='arrived')cancel();else start()};
+document.getElementById('bMenu').onclick=()=>show(S.dest&&!S.drive?'route':'menu');
+document.getElementById('bFit').onclick=fit;
+document.getElementById('bIn').onclick=()=>map.zoomIn();
+document.getElementById('bOut').onclick=()=>map.zoomOut();
+document.getElementById('bOpt').onclick=()=>show('options');
+addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'){if(e.key==='Escape')show('menu');return}
+  if(e.key==='/'){e.preventDefault();show('search')}
+  else if(e.key==='Enter'&&S.sel&&!S.drive)start();
+  else if(e.key===' '&&S.drive){e.preventDefault();S.paused=!S.paused}
+  else if(e.key==='Escape')show(S.dest&&!S.drive?'route':'menu');
+  else if(e.key==='+'||e.key==='=')map.zoomIn();
+  else if(e.key==='-')map.zoomOut();
+  else if(e.key==='f')fit();
+  else if(e.key==='m')show('menu');
+  else if(e.key==='o')show('options');
+});
+render();
+</script>
+</body>
+</html>
